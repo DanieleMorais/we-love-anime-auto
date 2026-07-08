@@ -6,6 +6,9 @@
 <meta content='width=device-width, initial-scale=1' name='viewport'/>
 <meta content='ca-pub-1623504542591354' name='google-adsense-account'/>
 <b:include data='blog' name='all-head-content'/>
+<b:if cond='data:view.isHomepage or data:view.isMultipleItems'><meta content='Daily anime news, reviews and guides. Releases, where to watch, manga and otaku culture — your anime universe for real fans.' name='description'/><b:else/><b:if cond='data:blog.metaDescription'><meta expr:content='data:blog.metaDescription' name='description'/></b:if></b:if>
+<link href='https://fonts.googleapis.com' rel='preconnect'/>
+<link crossorigin='anonymous' href='https://fonts.gstatic.com' rel='preconnect'/>
 <link rel='icon' href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%8E%8C%3C/text%3E%3C/svg%3E"/>
 <script async='async' src='https://www.googletagmanager.com/gtag/js?id=G-FNPQ67ZP00'></script>
 <script>//<![CDATA[
