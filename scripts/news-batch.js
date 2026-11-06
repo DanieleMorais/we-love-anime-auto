@@ -1,8 +1,8 @@
 // Publishes UP TO 10 anime news articles (in ENGLISH) per run (every 4h). No piracy, no +18.
-const CLIENT_ID = process.env.BLOGGER_CLIENT_ID, CLIENT_SECRET = process.env.BLOGGER_CLIENT_SECRET, REFRESH = process.env.BLOGGER_REFRESH_TOKEN, BLOG_ID = process.env.BLOGGER_BLOG_ID;
+const { publicar, listarPublicados, exigirCredenciais } = require("./publicar");
 const OR_KEY = process.env.OPENROUTER_API_KEY, IMG_BASE = process.env.IMG_BASE || "", SA_JSON = process.env.GOOGLE_SA_JSON || "", PER_RUN = parseInt(process.env.PER_RUN || "10", 10);
 const crypto = require("crypto");
-if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH || !BLOG_ID) { console.error("Missing secrets."); process.exit(1); }
+exigirCredenciais("Missing secrets.");
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const norm = s => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 const slugify = s => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 70) || "anime";
@@ -10,8 +10,7 @@ const b64url = x => Buffer.from(x).toString("base64").replace(/=/g, "").replace(
 const QUERIES = ["anime new season release", "anime news trailer announcement", "manga anime adaptation confirmed", "Crunchyroll Netflix anime 2026", "One Piece Jujutsu Kaisen Demon Slayer news", "upcoming anime 2026", "anime record popularity", "new anime episode reveal", "Solo Leveling Chainsaw Man Dandadan news", "anime studio announcement"];
 const CATS = ["News", "Releases", "Manga", "Reviews", "Otaku Culture", "Where to Watch"];
 const IMGQ = "anime style vibrant colorful dynamic dramatic scene";
-async function getToken() { return (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET, refresh_token: REFRESH, grant_type: "refresh_token" }) })).json()).access_token; }
-async function existentes() { try { const r = await fetch(`https://www.blogger.com/feeds/${BLOG_ID}/posts/default?alt=json&max-results=500`); return (((await r.json()).feed || {}).entry || []).map(e => norm(e.title.$t)); } catch { return []; } }
+async function existentes() { return (await listarPublicados()).map(e => norm(e.title && e.title.$t)); }
 async function coletar() {
   const vistos = new Set(), lista = [];
   for (const q of QUERIES.slice().sort(() => 0.5 - Math.random())) {
@@ -51,14 +50,14 @@ async function notifyGoogle(url) { if (!SA_JSON) return; try { const sa = JSON.p
   const jaTem = tit => { const w = norm(tit).split(" ").filter(x => x.length > 3); return jaTitulos.some(t => w.filter(x => t.includes(x)).length >= Math.max(4, Math.ceil(w.length * 0.7))); };
   let noticias = (await coletar()).filter(n => !jaTem(n.titulo));
   console.log("new headlines:", noticias.length, "| target:", PER_RUN);
-  let token = await getToken(); let ok = 0;
+  let ok = 0;
   for (let i = 0; i < noticias.length && ok < PER_RUN; i++) {
     const n = noticias[i]; const art = await gerar(n); if (!art || jaTem(art.titulo)) continue;
     const seed = Math.floor(Math.random() * 999999);
     const img = IMG_BASE ? `${IMG_BASE}/${slugify(art.titulo)}.webp?q=${encodeURIComponent(IMGQ)}&s=${seed}` : `https://image.pollinations.ai/prompt/${encodeURIComponent(IMGQ)}?width=1200&height=630&seed=${seed}&nologo=true`;
     const html = montar(art, img, n.fonte); const label = CATS[Math.floor(Math.random() * CATS.length)];
     let done = false;
-    for (let a = 0; a < 3 && !done; a++) { const pr = await fetch(`https://www.googleapis.com/blogger/v3/blogs/${BLOG_ID}/posts/?isDraft=false`, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ kind: "blogger#post", title: art.titulo, content: html, labels: [label] }) }); const pd = await pr.json(); if (pd.url) { ok++; done = true; jaTitulos.push(norm(art.titulo)); console.log(`${ok} OK: ${art.titulo.slice(0, 46)}`); notifyGoogle(pd.url); } else if (pr.status === 401) token = await getToken(); else if (pr.status === 403 || pr.status === 429) { console.log("quota, 40s..."); await sleep(40000); } else { done = true; console.log("FAIL:", JSON.stringify(pd.error?.message || pd).slice(0, 100)); } }
+    for (let a = 0; a < 3 && !done; a++) { const pd = await publicar({ titulo: art.titulo, html, label, capa: img }); if (pd.url) { ok++; done = true; jaTitulos.push(norm(art.titulo)); console.log(`${ok} OK: ${art.titulo.slice(0, 46)}`); notifyGoogle(pd.url); } else if (pd.status === 401) { /* o módulo renova o token na próxima tentativa */ } else if (pd.status === 403 || pd.status === 429) { console.log("quota, 40s..."); await sleep(40000); } else { done = true; console.log("FAIL:", JSON.stringify(pd.erro).slice(0, 100)); } }
     await sleep(1500);
   }
   console.log(`\n=== ${ok} articles published ===`);

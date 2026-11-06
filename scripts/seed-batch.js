@@ -1,8 +1,8 @@
 // ONE-TIME seed: publishes up to LIMIT evergreen anime articles (ENGLISH) to fill the blog. Dispatch manually.
-const CLIENT_ID = process.env.BLOGGER_CLIENT_ID, CLIENT_SECRET = process.env.BLOGGER_CLIENT_SECRET, REFRESH = process.env.BLOGGER_REFRESH_TOKEN, BLOG_ID = process.env.BLOGGER_BLOG_ID;
+const { publicar, listarPublicados, exigirCredenciais } = require("./publicar");
 const OR_KEY = process.env.OPENROUTER_API_KEY, IMG_BASE = process.env.IMG_BASE || "", SA_JSON = process.env.GOOGLE_SA_JSON || "", LIMIT = parseInt(process.env.LIMIT || "100", 10);
 const crypto = require("crypto");
-if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH || !BLOG_ID) { console.error("Missing secrets."); process.exit(1); }
+exigirCredenciais("Missing secrets.");
 const CAT = { R: "Reviews", G: "Genres", W: "Where to Watch", M: "Manga", C: "Characters", U: "Otaku Culture", L: "Releases", N: "News" };
 const IMGQ = { R: "anime style epic dramatic colorful scene", G: "anime style vibrant dynamic action colorful", W: "anime watching cozy tv screen colorful", M: "manga panels ink dramatic anime style", C: "anime hero character portrait vibrant", U: "japan otaku culture neon anime style", L: "anime new release poster vibrant colorful", N: "anime news vibrant colorful scene" };
 const POOL = [
@@ -14,8 +14,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const norm = s => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 const slugify = s => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 70) || "anime";
 const b64url = x => Buffer.from(x).toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-async function getToken() { const j = await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET, refresh_token: REFRESH, grant_type: "refresh_token" }) })).json(); return j.access_token; }
-async function existentes() { try { const r = await fetch(`https://www.blogger.com/feeds/${BLOG_ID}/posts/default?alt=json&max-results=500`); return (((await r.json()).feed || {}).entry || []).map(e => norm(e.title.$t)); } catch { return []; } }
+async function existentes() { return (await listarPublicados()).map(e => norm(e.title && e.title.$t)); }
 async function callAI(prompt) {
   const GK = process.env.GEMINI_API_KEY;
   if (GK) for (const model of ["gemini-3.1-flash-lite", "gemini-flash-latest"]) for (let t = 0; t < 3; t++) { try { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GK}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.85, maxOutputTokens: 8000 } }), signal: AbortSignal.timeout(120000) }); if (r.status === 429 || r.status >= 500) { await sleep(15000); continue; } if (!r.ok) break; const c = ((await r.json()).candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim(); if (c && c.length > 400) return c; } catch { await sleep(6000); } }
@@ -46,7 +45,7 @@ async function notifyGoogle(url) { if (!SA_JSON) return; try { const sa = JSON.p
   const jaTem = tema => { const w = norm(tema).split(" ").filter(x => x.length > 3); return existe.some(t => w.filter(x => t.includes(x)).length >= Math.max(4, Math.ceil(w.length * 0.7))); };
   const fila = POOL.filter(([t]) => !jaTem(t));
   console.log("candidates:", fila.length, "| limit:", LIMIT, "| already:", existe.length);
-  let token = await getToken(); let ok = 0;
+  let ok = 0;
   for (let i = 0; i < fila.length && ok < LIMIT; i++) {
     const [tema, ck] = fila[i]; if (jaTem(tema)) continue;
     const art = await gerar(tema); if (!art || jaTem(art.titulo)) { console.log("skip:", tema.slice(0, 40)); continue; }
@@ -55,7 +54,7 @@ async function notifyGoogle(url) { if (!SA_JSON) return; try { const sa = JSON.p
     const img = IMG_BASE ? `${IMG_BASE}/${slugify(art.titulo)}.webp?q=${encodeURIComponent(iq)}&s=${seed}` : `https://image.pollinations.ai/prompt/${encodeURIComponent(iq)}?width=1200&height=630&seed=${seed}&nologo=true`;
     const html = montar(art, img, tema); const label = CAT[ck] || "Anime";
     let done = false;
-    for (let a = 0; a < 3 && !done; a++) { const pr = await fetch(`https://www.googleapis.com/blogger/v3/blogs/${BLOG_ID}/posts/?isDraft=false`, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ kind: "blogger#post", title: art.titulo, content: html, labels: [label] }) }); const pd = await pr.json(); if (pd.url) { ok++; done = true; existe.push(norm(art.titulo)); console.log(`${ok} OK: ${art.titulo.slice(0, 50)}`); notifyGoogle(pd.url); } else if (pr.status === 401) token = await getToken(); else if (pr.status === 403 || pr.status === 429) { console.log("quota, 45s..."); await sleep(45000); } else { done = true; console.log("FAIL:", JSON.stringify(pd.error?.message || pd).slice(0, 100)); } }
+    for (let a = 0; a < 3 && !done; a++) { const pd = await publicar({ titulo: art.titulo, html, label, capa: img }); if (pd.url) { ok++; done = true; existe.push(norm(art.titulo)); console.log(`${ok} OK: ${art.titulo.slice(0, 50)}`); notifyGoogle(pd.url); } else if (pd.status === 401) { /* o módulo renova o token na próxima tentativa */ } else if (pd.status === 403 || pd.status === 429) { console.log("quota, 45s..."); await sleep(45000); } else { done = true; console.log("FAIL:", JSON.stringify(pd.erro).slice(0, 100)); } }
     await sleep(1200);
   }
   console.log(`\n=== ${ok} articles published ===`);
